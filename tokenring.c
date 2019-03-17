@@ -2,6 +2,11 @@
 #include <stdio.h>
 int main(int argc, char **argv)
 {
+
+    MPI_Init(&argc, &argv);
+    int rank, size;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
     int token;
     if (world_rank != 0)
     {
@@ -21,4 +26,5 @@ int main(int argc, char **argv)
         MPI_Recv(&token, 1, MPI_INT, world_size - 1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
         printf("Process %d received token %d from process %d\n", world_rank, token, world_size - 1);
     }
+    MPI_Finalize();
 }
