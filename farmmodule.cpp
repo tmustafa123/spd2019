@@ -36,7 +36,7 @@ int main(int argc, char **argv)
     {
         EmitterNode(size, dt_point, data, rank);
     }
-    else if (rank == size)
+    else if (rank == COLLECTOR_RANK)
     {
         CollectorNode(size, dt_point, rank);
     }
@@ -50,37 +50,75 @@ int main(int argc, char **argv)
 
 void EmitterNode(int size, MPI_Datatype dt_point, Point data[n_points], int myRank)
 {
+    int flag = 0;
     printf("In Emitter node %d\n", myRank);
+    for (int loop = 1; loop < 1000; loop++)
+    {
+        for (int worker_rank = 1; worker_rank < size; worker_rank++)
+        {
+            MPI_Send(data, n_points, dt_point, worker_rank, EMITTER_WORKER_TAG, MPI_COMM_WORLD);
+        }
+    }
+    /* Sent a marker to all workers only once to terminate */
     for (int worker_rank = 1; worker_rank < size; worker_rank++)
     {
-        MPI_Send(data, n_points, dt_point, worker_rank, EMITTER_WORKER_TAG, MPI_COMM_WORLD);
+        MPI_Send(data, 0, dt_point, worker_rank, EMITTER_WORKER_TAG, MPI_COMM_WORLD);
     }
 }
 void WorkerNode(int size, MPI_Datatype dt_point, int myRank)
 {
     Point data[n_points];
+    MPI_Status status;
+    int number_amount;
     printf("In Worker node %d\n", myRank);
-    MPI_Recv(data, n_points, dt_point, 0, EMITTER_WORKER_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-
-    for (int i = 0; i < n_points; ++i)
+    while (true)
     {
-        data[i].x = (double)i;
-        data[i].y = (double)-i;
-        data[i].z = (double)i * i;
+        MPI_Recv(data, n_points, dt_point, 0, EMITTER_WORKER_TAG, MPI_COMM_WORLD, &status);
+        // After receiving the message, check the status to determine
+        // how many numbers were actually received
+        MPI_Get_count(&status, MPI_INT, &number_amount);
+        if (number_amount == 0)
+        {
+            printf("%d Rank terminates\n", myRank);
+            MPI_Send(data, 0, dt_point, COLLECTOR_RANK, COLLECTOR_WORKER_TAG, MPI_COMM_WORLD);
+            break;
+        }
+        for (int i = 0; i < n_points; ++i)
+        {
+            data[i].x = (double)i;
+            data[i].y = (double)-i;
+            data[i].z = (double)i * i;
+        }
+        for (int i = 0; i < n_points; ++i)
+        {
+            std::cout << "Point #" << i << " : (" << data[i].x << "; " << data[i].y << "; " << data[i].z << ")"
+                      << std::endl;
+        }
+        MPI_Send(data, n_points, dt_point, COLLECTOR_RANK, COLLECTOR_WORKER_TAG, MPI_COMM_WORLD);
     }
-    for (int i = 0; i < n_points; ++i)
-    {
-        std::cout << "Point #" << i << " : (" << data[i].x << "; " << data[i].y << "; " << data[i].z << ")"
-                  << std::endl;
-    }
-    MPI_Send(data, n_points, dt_point, COLLECTOR_RANK, COLLECTOR_WORKER_TAG, MPI_COMM_WORLD);
 }
 void CollectorNode(int size, MPI_Datatype dt_point, int myRank)
 {
     Point data[n_points];
+    MPI_Status status;
     printf("In Collector node %d\n", myRank);
-    for (int worker_rank = 1; worker_rank < size; worker_rank++)
+    int worker_rank = 1;
+    int number_amount;
+    while (true)
     {
-        MPI_Recv(data, n_points, dt_point, worker_rank, COLLECTOR_WORKER_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        for (worker_rank = 1; worker_rank < size; worker_rank++)
+        {
+            MPI_Recv(data, n_points, dt_point, worker_rank, COLLECTOR_WORKER_TAG, MPI_COMM_WORLD, &status);
+            // After receiving the message, check the status to determine
+            // how many numbers were actually received
+            MPI_Get_count(&status, MPI_INT, &number_amount);
+            if (number_amount == 0)
+            {
+                printf("%d Collector terminates\n", myRank);
+                MPI_Send(data, 0, dt_point, COLLECTOR_RANK, COLLECTOR_WORKER_TAG, MPI_COMM_WORLD);
+            }
+            if (worker_rank == size)
+                worker_rank = 1;
+        }
     }
 }
