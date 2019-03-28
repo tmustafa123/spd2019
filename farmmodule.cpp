@@ -1,5 +1,7 @@
 #include "mpi.h"
 #include <iostream>
+#include <vector>
+#include <unistd.h>
 
 #define EMITTER_RANK 0
 #define COLLECTOR_RANK 1
@@ -11,9 +13,9 @@ struct Point
 {
     double x, y, z;
 };
-void EmitterNode(int size, MPI_Datatype dt_point, Point data[n_points], int myRank);
-void WorkerNode(int size, MPI_Datatype dt_point, int myRank);
-void CollectorNode(int size, MPI_Datatype dt_point, int myRank);
+void EmitterUnit(int size, MPI_Datatype dt_point, Point data[n_points], int myRank);
+void WorkerUnit(int size, MPI_Datatype dt_point, int myRank);
+void CollectorUnit(int size, MPI_Datatype dt_point, int myRank);
 int main(int argc, char **argv)
 {
     int rank, size;
@@ -34,38 +36,41 @@ int main(int argc, char **argv)
 
     if (rank == EMITTER_RANK)
     {
-        EmitterNode(size, dt_point, data, rank);
+        EmitterUnit(size, dt_point, data, rank);
     }
     else if (rank == COLLECTOR_RANK)
     {
-        CollectorNode(size, dt_point, rank);
+        CollectorUnit(size, dt_point, rank);
     }
     else
     {
-        WorkerNode(size, dt_point, rank);
+        WorkerUnit(size, dt_point, rank);
     }
     MPI_Finalize();
     return 0;
 }
 
-void EmitterNode(int size, MPI_Datatype dt_point, Point data[n_points], int myRank)
+void EmitterUnit(int size, MPI_Datatype dt_point, Point data[n_points], int myRank)
 {
-    int flag = 0;
+    int worker_rank = 1;
     printf("In Emitter node %d\n", myRank);
-    for (int loop = 1; loop < 1000; loop++)
+    for (int streamItem = 1; streamItem < 10; streamItem++)
     {
-        for (int worker_rank = 1; worker_rank < size; worker_rank++)
+        // Reset Rank
+        worker_rank = 1;
+        for (worker_rank; worker_rank < size; worker_rank++)
         {
             MPI_Send(data, n_points, dt_point, worker_rank, EMITTER_WORKER_TAG, MPI_COMM_WORLD);
         }
     }
-    /* Sent a marker to all workers only once to terminate */
-    for (int worker_rank = 1; worker_rank < size; worker_rank++)
+    /* Sent data of size 0 */
+    for (worker_rank = 1; worker_rank < size; worker_rank++)
     {
         MPI_Send(data, 0, dt_point, worker_rank, EMITTER_WORKER_TAG, MPI_COMM_WORLD);
     }
+    printf("Emitter Terminates %d\n", myRank);
 }
-void WorkerNode(int size, MPI_Datatype dt_point, int myRank)
+void WorkerUnit(int size, MPI_Datatype dt_point, int myRank)
 {
     Point data[n_points];
     MPI_Status status;
@@ -73,16 +78,22 @@ void WorkerNode(int size, MPI_Datatype dt_point, int myRank)
     printf("In Worker node %d\n", myRank);
     while (true)
     {
+        // Recieve a stream item
         MPI_Recv(data, n_points, dt_point, 0, EMITTER_WORKER_TAG, MPI_COMM_WORLD, &status);
-        // After receiving the message, check the status to determine
-        // how many numbers were actually received
+
+        // Add a 3 second delay
+        usleep(3000000);
+
+        // Check the size
         MPI_Get_count(&status, MPI_INT, &number_amount);
+        // terminate if data of size 0 is recieved and trigger the collector
         if (number_amount == 0)
         {
             printf("%d Rank terminates\n", myRank);
             MPI_Send(data, 0, dt_point, COLLECTOR_RANK, COLLECTOR_WORKER_TAG, MPI_COMM_WORLD);
             break;
         }
+        // Else process the data
         for (int i = 0; i < n_points; ++i)
         {
             data[i].x = (double)i;
@@ -97,28 +108,36 @@ void WorkerNode(int size, MPI_Datatype dt_point, int myRank)
         MPI_Send(data, n_points, dt_point, COLLECTOR_RANK, COLLECTOR_WORKER_TAG, MPI_COMM_WORLD);
     }
 }
-void CollectorNode(int size, MPI_Datatype dt_point, int myRank)
+void CollectorUnit(int size, MPI_Datatype dt_point, int myRank)
 {
     Point data[n_points];
     MPI_Status status;
     printf("In Collector node %d\n", myRank);
+    std::vector<int> bufferHoldRank;
     int worker_rank = 1;
     int number_amount;
-    while (true)
+    bool flag = true;
+
+    while (flag)
     {
+        // Loop in round robin
         for (worker_rank = 1; worker_rank < size; worker_rank++)
         {
             MPI_Recv(data, n_points, dt_point, worker_rank, COLLECTOR_WORKER_TAG, MPI_COMM_WORLD, &status);
-            // After receiving the message, check the status to determine
-            // how many numbers were actually received
             MPI_Get_count(&status, MPI_INT, &number_amount);
+            // If worker already terminated
             if (number_amount == 0)
             {
-                printf("%d Collector terminates\n", myRank);
-                MPI_Send(data, 0, dt_point, COLLECTOR_RANK, COLLECTOR_WORKER_TAG, MPI_COMM_WORLD);
+                bufferHoldRank.push_back(worker_rank);
             }
-            if (worker_rank == size)
-                worker_rank = 1;
+            // Collector terminates
+            if (bufferHoldRank.size() == size)
+            {
+                printf("Collector terminates\n");
+                // Terminate the outer loop
+                flag = false;
+                break;
+            }
         }
     }
 }
